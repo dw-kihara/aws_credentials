@@ -118,8 +118,9 @@ force_credentials_refresh(Options) ->
 
 -spec init(_) -> {'ok', state()}.
 init(_Args) ->
+    FailIfUnavailable = application:get_env(aws_credentials, fail_if_unavailable, false),
     ProviderOptions = application:get_env(aws_credentials, provider_options, #{}),
-    {ok, C, T} = fetch_credentials(ProviderOptions),
+    {ok, C, T} = fetch_credentials(FailIfUnavailable, ProviderOptions),
     {ok, #state{credentials=C, tref=T}}.
 
 -spec terminate(any(), state()) -> 'ok'.
@@ -131,7 +132,8 @@ terminate(_Reason, _State) ->
 handle_call(get_credentials, _From, State=#state{credentials=C}) ->
     {reply, C, State};
 handle_call({force_refresh, Options}, _From, State=#state{tref=T}) ->
-    {ok, C, NewT} = fetch_credentials(Options),
+    FailIfUnavailable = application:get_env(aws_credentials, fail_if_unavailable, false),
+    {ok, C, NewT} = fetch_credentials(FailIfUnavailable, Options),
     case is_reference(T) of
         true -> erlang:cancel_timer(T);
         false -> ok
@@ -148,8 +150,15 @@ handle_cast(Message, State) ->
 
 -spec handle_info(any(), state()) -> {'noreply', state()}.
 handle_info(refresh_credentials, State) ->
+    Self = self(),
     ProviderOptions = application:get_env(aws_credentials, provider_options, #{}),
-    case fetch_credentials(ProviderOptions) of
+    RefreshFun = fun() ->
+                    Self ! {refresh_credentials_result, fetch_credentials(false, ProviderOptions)}
+                 end,
+    spawn_link(RefreshFun),
+    {noreply, State#state{tref=undefined}};
+handle_info({refresh_credentials_result, Result}, State) ->
+    case Result of
         {ok, undefined, T} -> {noreply, State#state{tref=T}};
         {ok, C, T} -> {noreply, State#state{credentials=C, tref=T}}
     end;
@@ -169,10 +178,10 @@ format_status(_, [_PDict, State]) ->
 %% Internal functions
 %%====================================================================
 
--spec fetch_credentials(aws_credentials_provider:options()) ->
+-spec fetch_credentials(boolean(), aws_credentials_provider:options()) ->
         {ok, credentials() | 'undefined', reference() | 'undefined'}.
-fetch_credentials(Options) ->
-    ShouldCatch = not application:get_env(aws_credentials, fail_if_unavailable, false),
+fetch_credentials(FailIfUnavailable, Options) ->
+    ShouldCatch = not FailIfUnavailable,
     try aws_credentials_provider:fetch(Options) of
           {ok, Credentials, ExpirationTime} ->
             Tref = setup_update_callback(ExpirationTime),
