@@ -14,6 +14,7 @@
 -define(RETRY_DELAY, 5). % 5 seconds
 -define(GREGORIAN_TO_EPOCH_SECONDS, 62167219200).
 
+
 -include_lib("kernel/include/logger.hrl").
 
 -export([ init/1
@@ -22,8 +23,13 @@
         , handle_call/3
         , handle_cast/2
         , handle_info/2
-        , format_status/2
+        , format_status/1
         ]).
+
+%% `format_status/2' is deprecated since OTP25
+-if(?OTP_RELEASE < 25).
+-export([format_status/2]).
+-endif.
 
 -export([ start_link/0
         , stop/0
@@ -161,9 +167,16 @@ handle_info(Message, State) ->
 code_change(_Prev, State, _Extra) ->
     {ok, State}.
 
+-spec format_status(gen_server:format_status()) -> gen_server:format_status().
+format_status(#{state := State} = Status) ->
+    maps:put(state, State#state{credentials=information_redacted}, Status).
+
+%% `format_status/2' is deprecated since OTP25
+-if(?OTP_RELEASE < 25).
 -spec format_status('normal' | 'terminate', any()) -> any().
 format_status(_, [_PDict, State]) ->
     [{data, [{"State", State#state{credentials=information_redacted}}]}].
+-endif.
 
 %%====================================================================
 %% Internal functions
